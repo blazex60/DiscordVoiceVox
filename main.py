@@ -2405,6 +2405,7 @@ async def alart(ctx, time: discord.Option(input_type=str, description="時刻 �
 
 
 async def _pool_init(conn):
+    await conn.set_type_codec("jsonb", schema="pg_catalog", encoder=json.dumps, decoder=json.loads)
     await conn.execute("SET statement_timeout = '10s'")
 
 
