@@ -3482,8 +3482,12 @@ async def status_update_loop():
                 remove_premium_guild_dict(str(guild.id))
                 continue
 
+            if guild.id not in premium_server_list:
+                continue
             setting_json = await get_guild_setting(guild.id)
             alarm_setting_json = setting_json.get("alarm", [])
+            if not alarm_setting_json:
+                continue
             now_datetime = datetime.datetime.now()
             now_youbi = now_datetime.weekday()
             for alarm in alarm_setting_json:
