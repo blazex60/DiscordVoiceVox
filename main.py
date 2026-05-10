@@ -3469,6 +3469,9 @@ vclist_len = 0
 
 @tasks.loop(minutes=1)
 async def status_update_loop():
+    _t0 = time.perf_counter()
+    _t_inner = 0.0
+    _gs_count = 0
     for key in list(vclist):
         try:
             guild = bot.get_guild(key)
@@ -3484,7 +3487,10 @@ async def status_update_loop():
 
             if guild.id not in premium_server_list:
                 continue
+            _ts = time.perf_counter()
             setting_json = await get_guild_setting(guild.id)
+            _t_inner += time.perf_counter() - _ts
+            _gs_count += 1
             alarm_setting_json = setting_json.get("alarm", [])
             if not alarm_setting_json:
                 continue
@@ -3522,6 +3528,12 @@ async def status_update_loop():
         except Exception as e:
             logger.error(e)
             pass
+
+    _elapsed = time.perf_counter() - _t0
+    logger.warning(
+        f"status_update_loop: total={_elapsed:.2f}s, vclist={len(vclist)}, "
+        f"get_guild_setting calls={_gs_count}, get_guild_setting total={_t_inner:.2f}s"
+    )
 
     if len(voice_generate_time_list) != 0 and len(voice_generate_time_list_p) != 0:
         avarage = sum(voice_generate_time_list) / len(voice_generate_time_list)
@@ -3751,6 +3763,9 @@ async def watch_main_changes():
 
 @tasks.loop(minutes=1, count=1)
 async def init_loop():
+    # 遅いコールバック検出（イベントループブロックの犯人特定用）
+    asyncio.get_event_loop().slow_callback_duration = 0.1
+    logger.warning("slow_callback_duration=0.1s 有効化")
     # bot属性を使用してグローバル状態を管理（コグリロード時も永続化）
     bot.default_conn = aiohttp.TCPConnector(limit=20, limit_per_host=5)
     bot.default_gpu_conn = aiohttp.TCPConnector(limit=20, limit_per_host=5)
