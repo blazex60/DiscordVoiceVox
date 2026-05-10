@@ -23,7 +23,11 @@ class SetAlarmCommand(commands.Cog):
 
         for i in range(len(alarm_setting_json)):
             alarm = alarm_setting_json[i]
-            alarm_datetime = datetime.datetime.strptime(alarm.get("time", "2023/4/1 11:11"), "%Y/%m/%d %H:%M")
+            time_str = alarm.get("time", "2023/4/1 11:11")
+            try:
+                alarm_datetime = datetime.datetime.strptime(time_str, "%Y/%m/%d %H:%M")
+            except ValueError:
+                alarm_datetime = datetime.datetime.strptime(time_str, "%H:%M")
             alarm_message = alarm.get('message', 'アラームなのだ')
             option_name_message = truncate_text(alarm_message, 30)
             result.append(discord.OptionChoice(name=f"{alarm_datetime.hour}:{alarm_datetime.minute} {option_name_message}",
@@ -94,7 +98,11 @@ class SetAlarmCommand(commands.Cog):
 
             for i in range(len(alarm_setting_json)):
                 alarm = alarm_setting_json[i]
-                alarm_datetime = datetime.datetime.strptime(alarm.get("time", "2023/4/1 11:11"), "%Y/%m/%d %H:%M")
+                time_str = alarm.get("time", "2023/4/1 11:11")
+                try:
+                    alarm_datetime = datetime.datetime.strptime(time_str, "%Y/%m/%d %H:%M")
+                except ValueError:
+                    alarm_datetime = datetime.datetime.strptime(time_str, "%H:%M")
                 alarm_message = alarm.get('message', 'アラームなのだ')
                 result += f"{alarm_datetime.hour}:{alarm_datetime.minute} {alarm_message}\n"
             await main.update_guild_setting(ctx.guild.id, "alarm", alarm_setting_json)
