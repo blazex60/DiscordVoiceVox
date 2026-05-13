@@ -3683,30 +3683,38 @@ async def premium_user_check_loop():
     global premium_server_list_300
     global premium_server_list_500
     global premium_server_list_1000
-    premium_user_list.clear()
-    premium_server_list_300.clear()
-    premium_server_list_500.clear()
-    premium_server_list_1000.clear()
     count = 0
 
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(check_premium_id, timeout=5) as response:
                 if response.status == 200:
-                    response_json = await response.json()  # レスポンスのテキストを取得
-                    for (amount, value) in response_json.items():
-                        for user_id in value:
-                            await add_premium_lopp(user_id, int(amount))
-                            count += 1
+                    response_json = await response.json()
                 else:
                     print(f"エラー: ステータスコード {response.status}")
-                    return None
+                    return
     except aiohttp.ClientError as e:
         print(f"リクエストエラー: {e}")
-        return None
+        return
     except ValueError:
         print("取得した値を整数に変換できませんでした。")
-        return None
+        return
+
+    all_user_ids = list({str(uid).replace(" ", "") for value in response_json.values() for uid in value})
+    if all_user_ids and bot.pool is not None:
+        async with bot.pool.acquire() as conn:
+            rows = await conn.fetch('SELECT * FROM voice WHERE id = ANY($1::text[]);', all_user_ids)
+            for row in rows:
+                _db_row_cache[("voice", row["id"].replace(" ", ""))] = row
+
+    premium_user_list.clear()
+    premium_server_list_300.clear()
+    premium_server_list_500.clear()
+    premium_server_list_1000.clear()
+    for (amount, value) in response_json.items():
+        for user_id in value:
+            await add_premium_lopp(user_id, int(amount))
+            count += 1
 
     print(f"プレミアム数: {count}")
 
