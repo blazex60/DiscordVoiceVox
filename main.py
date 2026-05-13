@@ -3529,12 +3529,6 @@ async def status_update_loop():
             logger.error(e)
             pass
 
-    _elapsed = time.perf_counter() - _t0
-    logger.warning(
-        f"status_update_loop: total={_elapsed:.2f}s, vclist={len(vclist)}, "
-        f"get_guild_setting calls={_gs_count}, get_guild_setting total={_t_inner:.2f}s"
-    )
-
     if len(voice_generate_time_list) != 0 and len(voice_generate_time_list_p) != 0:
         avarage = sum(voice_generate_time_list) / len(voice_generate_time_list)
         avarage_p = sum(voice_generate_time_list_p) / len(voice_generate_time_list_p)
@@ -3715,6 +3709,11 @@ async def premium_user_check_loop():
         return None
 
     print(f"プレミアム数: {count}")
+
+
+@premium_user_check_loop.before_loop
+async def before_premium_user_check_loop():
+    await asyncio.sleep(random.uniform(0, 600))
 
 
 async def watch_cog_changes():
