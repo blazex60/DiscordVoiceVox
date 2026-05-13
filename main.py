@@ -3469,6 +3469,9 @@ vclist_len = 0
 
 @tasks.loop(minutes=1)
 async def status_update_loop():
+    _t0 = time.perf_counter()
+    _t_inner = 0.0
+    _gs_count = 0
     for key in list(vclist):
         try:
             guild = bot.get_guild(key)
@@ -3484,7 +3487,10 @@ async def status_update_loop():
 
             if guild.id not in premium_server_list:
                 continue
+            _ts = time.perf_counter()
             setting_json = await get_guild_setting(guild.id)
+            _t_inner += time.perf_counter() - _ts
+            _gs_count += 1
             alarm_setting_json = setting_json.get("alarm", [])
             if not alarm_setting_json:
                 continue
@@ -3677,32 +3683,45 @@ async def premium_user_check_loop():
     global premium_server_list_300
     global premium_server_list_500
     global premium_server_list_1000
-    premium_user_list.clear()
-    premium_server_list_300.clear()
-    premium_server_list_500.clear()
-    premium_server_list_1000.clear()
     count = 0
 
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(check_premium_id, timeout=5) as response:
                 if response.status == 200:
-                    response_json = await response.json()  # レスポンスのテキストを取得
-                    for (amount, value) in response_json.items():
-                        for user_id in value:
-                            await add_premium_lopp(user_id, int(amount))
-                            count += 1
+                    response_json = await response.json()
                 else:
                     print(f"エラー: ステータスコード {response.status}")
-                    return None
+                    return
     except aiohttp.ClientError as e:
         print(f"リクエストエラー: {e}")
-        return None
+        return
     except ValueError:
         print("取得した値を整数に変換できませんでした。")
-        return None
+        return
+
+    all_user_ids = list({str(uid).replace(" ", "") for value in response_json.values() for uid in value})
+    if all_user_ids and bot.pool is not None:
+        async with bot.pool.acquire() as conn:
+            rows = await conn.fetch('SELECT * FROM voice WHERE id = ANY($1::text[]);', all_user_ids)
+            for row in rows:
+                _db_row_cache[("voice", row["id"].replace(" ", ""))] = row
+
+    premium_user_list.clear()
+    premium_server_list_300.clear()
+    premium_server_list_500.clear()
+    premium_server_list_1000.clear()
+    for (amount, value) in response_json.items():
+        for user_id in value:
+            await add_premium_lopp(user_id, int(amount))
+            count += 1
 
     print(f"プレミアム数: {count}")
+
+
+@premium_user_check_loop.before_loop
+async def before_premium_user_check_loop():
+    await asyncio.sleep(random.uniform(0, 600))
 
 
 async def watch_cog_changes():
@@ -3751,6 +3770,9 @@ async def watch_main_changes():
 
 @tasks.loop(minutes=1, count=1)
 async def init_loop():
+    # 遅いコールバック検出（イベントループブロックの犯人特定用）
+    asyncio.get_event_loop().slow_callback_duration = 0.1
+    logger.warning("slow_callback_duration=0.1s 有効化")
     # bot属性を使用してグローバル状態を管理（コグリロード時も永続化）
     bot.default_conn = aiohttp.TCPConnector(limit=20, limit_per_host=5)
     bot.default_gpu_conn = aiohttp.TCPConnector(limit=20, limit_per_host=5)
