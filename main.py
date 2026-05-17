@@ -4241,26 +4241,36 @@ async def delete_private_dict(server_id, source):
         json.dump(sorted_json_data, f, ensure_ascii=False)
 
 
+_guild_setting_cache = {}
+
+
 async def update_guild_setting(server_id, setting, value):
-    try:
-        with open(os.path.dirname(os.path.abspath(__file__)) + f"/guild_setting/{server_id}.json", "r",
-                  encoding='utf-8') as f:
-            setting_dict = json.load(f)
-    except:
-        setting_dict = {}
+    path = os.path.dirname(os.path.abspath(__file__)) + f"/guild_setting/{server_id}.json"
+    setting_dict = _guild_setting_cache.get(server_id)
+    if setting_dict is None:
+        try:
+            async with aiofiles.open(path, "r", encoding='utf-8') as f:
+                setting_dict = json.loads(await f.read())
+        except:
+            setting_dict = {}
     setting_dict[setting] = value
-    with open(os.path.dirname(os.path.abspath(__file__)) + f"/guild_setting/{server_id}.json", 'wt',
-              encoding='utf-8') as f:
-        json.dump(setting_dict, f, ensure_ascii=False)
+    async with aiofiles.open(path, 'wt', encoding='utf-8') as f:
+        await f.write(json.dumps(setting_dict, ensure_ascii=False))
+    _guild_setting_cache[server_id] = setting_dict
 
 
 async def get_guild_setting(server_id):
+    cached = _guild_setting_cache.get(server_id)
+    if cached is not None:
+        return cached
     try:
-        with open(os.path.dirname(os.path.abspath(__file__)) + f"/guild_setting/{server_id}.json", "r",
-                  encoding='utf-8') as f:
-            setting_dict = json.load(f)
+        async with aiofiles.open(
+                os.path.dirname(os.path.abspath(__file__)) + f"/guild_setting/{server_id}.json",
+                "r", encoding='utf-8') as f:
+            setting_dict = json.loads(await f.read())
     except:
         setting_dict = {}
+    _guild_setting_cache[server_id] = setting_dict
     return setting_dict
 
 
