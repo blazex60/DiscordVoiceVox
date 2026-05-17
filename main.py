@@ -3278,7 +3278,8 @@ async def honyaku_and_ikaryaku(lang, output, voice_id, member_id, guild_id, is_p
             output = await asyncio.to_thread(ts.translate_text, output, to_language="ja")
             #print("翻訳")
 
-        output = (await romajitable.to_kana(output)).katakana
+        if re.search("[a-zA-Z]", output):
+            output = (await romajitable.to_kana(output)).katakana
         if len(output) <= 0:
             return ""
         output = re.sub("w{4,100}", "ワラ", output)
