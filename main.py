@@ -2821,6 +2821,13 @@ async def yomiage(member, guild, text: str, no_read_name=False):
     is_premium = False
     time_sta = time.time()
     source = None
+    _t_marks = {}
+    _t_prev = time.perf_counter()
+    def _mark(name):
+        nonlocal _t_prev
+        now = time.perf_counter()
+        _t_marks[name] = _t_marks.get(name, 0.0) + (now - _t_prev)
+        _t_prev = now
     try:
         if text == "zundamon!!stop":
             del yomiage_queue[guild.id]
@@ -2938,8 +2945,10 @@ async def yomiage(member, guild, text: str, no_read_name=False):
         elif lang == "ja":
             output = re.sub(pattern, "ユーアールエル省略", output)
 
+        _mark("pre")
         output = await henkan_private_dict(guild.id, output, is_premium)
         output = await henkan_private_dict(9686, output)
+        _mark("dict")
 
         if await getdatabase(guild.id, "is_reademoji", True, "guild"):
             output = emoji.demojize(output, language="ja")
@@ -2956,6 +2965,7 @@ async def yomiage(member, guild, text: str, no_read_name=False):
             output = await replace_mentions_with_names(output, guild)
         else:
             output = re.sub(pattern_mension, "", output)
+        _mark("mention")
 
         if len(output) <= 0:
             return
@@ -2978,6 +2988,7 @@ async def yomiage(member, guild, text: str, no_read_name=False):
                                                                  is_premium)
         else:
             split_output = [await honyaku_and_ikaryaku(lang, output, voice_id, member.id, guild.id, is_premium)]
+        _mark("honyaku")
 
         if guild.voice_client is None:
             return
@@ -3045,6 +3056,7 @@ async def yomiage(member, guild, text: str, no_read_name=False):
             filename = await text2wav(gen_text, int(voice_id), is_premium,
                                       speed="100",
                                       pitch="0", guild_id=guild.id, is_self_upload=is_self_gen)
+            _mark("tts")
             if filename != "failed":
                 wav_list.append(filename)
                 continue
@@ -3053,6 +3065,7 @@ async def yomiage(member, guild, text: str, no_read_name=False):
                 return
         if len(wav_list) > 1:
             filename = await connect_waves(wave_list=wav_list)
+            _mark("concat")
             if filename is None:
                 logger.error("結合失敗")
                 return
@@ -3074,8 +3087,10 @@ async def yomiage(member, guild, text: str, no_read_name=False):
                 logger.error("結果が見つかりませんでした。")
                 return
             source = source_serch[0]
+            _mark("lavalink")
         else:
             source = await discord.FFmpegOpusAudio.from_probe(source=filename)
+            _mark("ffmpeg")
 
 
     except Exception as e:
@@ -3095,7 +3110,8 @@ async def yomiage(member, guild, text: str, no_read_name=False):
             premium_text = ""
             voice_generate_time_list.append(tim)
         if tim > 3:
-            print(f"{premium_text} v:{voice_id} s:{speed} p:{pitch} t:{str(tim)} text:{output}")
+            marks_str = " ".join(f"{k}:{v:.2f}" for k, v in _t_marks.items())
+            print(f"{premium_text} v:{voice_id} s:{speed} p:{pitch} t:{str(tim)} marks:[{marks_str}] text:{output}")
 
         if is_lavalink:
             player = guild.voice_client
@@ -3259,10 +3275,11 @@ async def honyaku_and_ikaryaku(lang, output, voice_id, member_id, guild_id, is_p
         if (await is_premium_check(guild_id, 300) and re.match("[ぁ-んァ-ヶー一-龯]", output) is None
             and await getdatabase(guild_id, "is_translate", False, "guild")):
             #print(output)
-            output = ts.translate_text(output, to_language="ja")
+            output = await asyncio.to_thread(ts.translate_text, output, to_language="ja")
             #print("翻訳")
 
-        output = (await romajitable.to_kana(output)).katakana
+        if re.search("[a-zA-Z]", output):
+            output = (await romajitable.to_kana(output)).katakana
         if len(output) <= 0:
             return ""
         output = re.sub("w{4,100}", "ワラ", output)
