@@ -2257,6 +2257,10 @@ async def auto_join():
                     logger.error(f"Could not find voice channel with ID {server_json['voice_ch_id']} in guild {guild.id}")
                     continue
 
+                if len(voice_channel.voice_states) <= 0:
+                    logger.error(f"Auto Join No Player voice channel {voice_channel.id} in guild {guild.id}")
+                    continue
+
                 # Check if already connected to a voice channel
                 if guild.voice_client is not None:
                     logger.error(f"Already connected to a voice channel in guild {guild.id}, using existing connection")
@@ -3475,6 +3479,8 @@ def is_bot_only(channel):
     for member in channel.members:
         if member.bot is False:
             return False
+    if len(channel.members) < len(channel.voice_states):
+        return False
     return True
 
 
