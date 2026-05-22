@@ -39,8 +39,6 @@ from lavalink.filters import Timescale
 import emoji
 import romajitable
 import unicodedata
-from cachetools import TTLCache
-
 from LavalinkClient import LavalinkWavelink, LavalinkPlayer
 from fast_sharded_bot import FastShardedBot
 
@@ -75,8 +73,6 @@ is_use_gpu_server_time = False
 
 # グローバル変数の初期化は init_bot_state() で行われ、bot.* 属性として保存される
 # 後方互換性のため、以下でエイリアスを作成（botインスタンス作成後に設定）
-_db_cache: TTLCache = TTLCache(maxsize=10000, ttl=30)
-_db_row_cache: TTLCache = TTLCache(maxsize=5000, ttl=60)
 _private_dict_cache = {}
 
 text_limit = 50
@@ -2409,7 +2405,6 @@ async def alart(ctx, time: discord.Option(input_type=str, description="時刻 �
 
 
 async def _pool_init(conn):
-    await conn.set_type_codec("jsonb", schema="pg_catalog", encoder=json.dumps, decoder=json.loads)
     await conn.execute("SET statement_timeout = '10s'")
 
 
@@ -2421,41 +2416,52 @@ async def get_connection():
     setup=_pool_init)
 
 
-async def _fetch_row_all(userid, table):
-    row_key = (table, str(userid))
-    if row_key in _db_row_cache:
-        return _db_row_cache[row_key]
-    if bot.pool is None:
-        logger.error("pool is None/get database")
-        bot.pool = await get_connection()
-    async with bot.pool.acquire() as conn:
-        row = await conn.fetchrow(f'SELECT * from {table} where "id" = $1;', str(userid))
-        if row is None:
-            if table == "voice":
-                await conn.execute(f'INSERT INTO {table} (id, voiceid) VALUES ($1, 3);', str(userid))
-            elif table == "guild":
-                await conn.execute(f'INSERT INTO {table} (id) VALUES ($1);', str(userid))
-            row = await conn.fetchrow(f'SELECT * from {table} where "id" = $1;', str(userid))
-    _db_row_cache[row_key] = row
-    return row
+_JSONB_COLUMNS = {"auto_join", "member_voices"}
+
+
+def _decode_db_value(id, val, default):
+    if val is None:
+        return default
+    if id in _JSONB_COLUMNS and isinstance(val, str):
+        try:
+            return json.loads(val)
+        except Exception:
+            return default
+    return val
 
 
 async def getdatabase(userid, id, default=None, table="voice"):
-    cache_key = (table, str(userid), id)
-    if cache_key in _db_cache:
-        return _db_cache[cache_key]
-    row = await _fetch_row_all(userid, table)
-    if row is not None and id in row:
-        result = default if row[id] is None else row[id]
-    else:
-        result = default
-    _db_cache[cache_key] = result
-    return result
+    sid = str(userid)
+    if bot.pool is None:
+        logger.error("pool is None/get database")
+        bot.pool = await get_connection()
+    try:
+        async with bot.pool.acquire() as conn:
+            val = await conn.fetchval(
+                f'SELECT {id} FROM {table} WHERE "id" = $1;', sid
+            )
+            if val is None:
+                exists = await conn.fetchval(
+                    f'SELECT 1 FROM {table} WHERE "id" = $1;', sid
+                )
+                if exists is None:
+                    if table == "voice":
+                        await conn.execute(
+                            f'INSERT INTO {table} (id, voiceid) VALUES ($1, 3);', sid
+                        )
+                    elif table == "guild":
+                        await conn.execute(
+                            f'INSERT INTO {table} (id) VALUES ($1);', sid
+                        )
+    except (asyncpg.exceptions.QueryCanceledError, asyncio.TimeoutError) as e:
+        logger.warning(f"DB timeout {table}.{id}/{sid}: {e}")
+        return default
+    return _decode_db_value(id, val, default)
 
 
 async def setdatabase(userid, id, value, table="voice"):
-    _db_cache.pop((table, str(userid), id), None)
-    _db_row_cache.pop((table, str(userid)), None)
+    if id in _JSONB_COLUMNS and not isinstance(value, (str, bytes)) and value is not None:
+        value = json.dumps(value)
     async with bot.pool.acquire() as conn:
         rows = await conn.fetchrow(f'SELECT {id} from {table} where "id" = $1;', (str(userid)))
         if rows is None:
@@ -2825,6 +2831,8 @@ async def yomiage(member, guild, text: str, no_read_name=False):
     is_premium = False
     time_sta = time.time()
     source = None
+    output = text
+    voice_id = None
     _t_marks = {}
     _t_prev = time.perf_counter()
     def _mark(name):
@@ -3722,13 +3730,6 @@ async def premium_user_check_loop():
     except ValueError:
         print("取得した値を整数に変換できませんでした。")
         return
-
-    all_user_ids = list({str(uid).replace(" ", "") for value in response_json.values() for uid in value})
-    if all_user_ids and bot.pool is not None:
-        async with bot.pool.acquire() as conn:
-            rows = await conn.fetch('SELECT * FROM voice WHERE id = ANY($1::text[]);', all_user_ids)
-            for row in rows:
-                _db_row_cache[("voice", row["id"].replace(" ", ""))] = row
 
     premium_user_list.clear()
     premium_server_list_300.clear()
