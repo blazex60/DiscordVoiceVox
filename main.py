@@ -3828,10 +3828,10 @@ async def watch_main_changes():
 @tasks.loop(minutes=1, count=1)
 async def init_loop():
     # 遅いコールバック検出（イベントループブロックの犯人特定用）
-    loop = asyncio.get_event_loop()
-    loop.set_debug(True)
-    loop.slow_callback_duration = 0.5
-    logger.warning("slow_callback_duration=0.5s + debug mode 有効化")
+    # loop = asyncio.get_event_loop()
+    # loop.set_debug(True)
+    # loop.slow_callback_duration = 0.5
+    # logger.warning("slow_callback_duration=0.5s + debug mode 有効化")
     # bot属性を使用してグローバル状態を管理（コグリロード時も永続化）
     bot.default_conn = aiohttp.TCPConnector(limit=20, limit_per_host=5)
     bot.default_gpu_conn = aiohttp.TCPConnector(limit=20, limit_per_host=5)
