@@ -317,7 +317,7 @@ class LavalinkVoiceClient(discord.VoiceProtocol):
                 pass
 
     async def on_voice_state_update(self, data):
-        channel_id = data['channel_id']
+        channel_id = data.channel_id
 
         if not channel_id:
             await self._destroy()
@@ -3743,6 +3743,8 @@ async def save_join_list_task():
 
 @tasks.loop(minutes=10)
 async def premium_user_check_loop():
+    if premium_user_check_loop.current_loop != 0:
+        await asyncio.sleep(random.uniform(0, 600))
     if check_premium_id is None:
         return
     global premium_user_list
@@ -3780,7 +3782,7 @@ async def premium_user_check_loop():
 
 @premium_user_check_loop.before_loop
 async def before_premium_user_check_loop():
-    await asyncio.sleep(random.uniform(0, 600))
+    await bot.wait_until_ready()
 
 
 async def watch_cog_changes():
@@ -4455,7 +4457,7 @@ async def connect_websocket():
 async def auto_restart():
     # 水曜日（weekday=2）のみ実行
     if datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=+9), 'JST')).weekday() == 2:
-        await restart("ずんだもんの定期再起動を行います（毎週水曜日9:00）")
+        await stop("ずんだもんの定期再起動を行います（毎週水曜日9:00）")
 
 if __name__ == '__main__':
     bot.loop.create_task(init_loop())
