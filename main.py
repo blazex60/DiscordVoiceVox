@@ -2805,6 +2805,8 @@ async def on_message(message: discord.Message):
         output = message.content
         if len(message.attachments) >= 1:
             output = "テンプファイル" + output
+        if len(message.stickers) >= 1:
+            output = output + " ".join(sticker.name for sticker in message.stickers)
         await add_yomiage_queue(message.author, message.guild, output)
 
 @bot.event
