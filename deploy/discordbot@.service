@@ -1,0 +1,26 @@
+[Unit]
+# 汎用テンプレート。%i = インスタンス名。例: discordbot@zundamon-c0
+# 各インスタンス固有の設定(パス/venv/クラスタ)は /etc/discordbot/%i.env で与える。
+Description=Discord Bot instance %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# インスタンスごとの設定ファイル(下の example.env 参照)
+EnvironmentFile=/etc/discordbot/%i.env
+# BOT_DIR に cd して、そのbotの venv の python で main.py を実行。
+# exec で置き換えるので systemd は python プロセスを直接監視する。
+ExecStart=/bin/sh -c 'cd "$BOT_DIR" && exec "$VENV_PYTHON" main.py'
+
+# 全bot共通のサービス実行ユーザー(bot毎にユーザーを分ける場合はbot別テンプレートにする)
+User=zundamon
+
+Restart=always
+RestartSec=10
+TimeoutStartSec=600
+# 読み上げ1件ごとのprintで間引かれないようjournaldのレート制限を無効化
+LogRateLimitIntervalSec=0
+
+[Install]
+WantedBy=multi-user.target

@@ -106,12 +106,17 @@ BOT_NICKNAME = os.getenv("BOT_NICKNAME", "ずんだもんβ")
 EEW_WEBHOOK_URL = os.getenv("EEW_WEBHOOK_URL", None)
 # voice_id_list, non_premium_user, voice_choices, generating_guilds, pool は bot.* として init_bot_state() で初期化
 
+# クラスタリング設定。CLUSTER_COUNT が未設定 or 1 なら単一プロセス(従来動作)。
+CLUSTER_ID = int(os.getenv("CLUSTER_ID", "0"))
+CLUSTER_COUNT = int(os.getenv("CLUSTER_COUNT", "1"))
+_CLUSTER_SUFFIX = f"-c{CLUSTER_ID}" if CLUSTER_COUNT > 1 else ""
+
 logger = logging.getLogger('discord')
 stream_handler = logging.StreamHandler()
 stream_handler.setLevel(logging.INFO)
 stream_handler.setFormatter(logging.Formatter("%(message)s"))
 handler = logging.FileHandler(filename=os.path.dirname(os.path.abspath(__file__)) + "/logs/"
-                                       + f'discord-{"{:%Y-%m-%d-%H-%M}".format(datetime.datetime.now())}.log',
+                                       + f'discord{_CLUSTER_SUFFIX}-{"{:%Y-%m-%d-%H-%M}".format(datetime.datetime.now())}.log',
                               encoding='utf-8', mode='w')
 handler.setFormatter(logging.Formatter('%(asctime)s:%(levelname)s:%(name)s: %(message)s'))
 BEHIND_NOTIFY_CHANNEL_ID = 888053573051629630
@@ -149,8 +154,12 @@ async def create_session():
 
 aiohttp_client_session = asyncio.get_event_loop().run_until_complete(create_session())
 
+# TOTAL_SHARDS で全シャード数を固定(未設定なら従来通りDiscordから自動取得)。
+# クラスタ間で必ず同じ値にすること。テスト時は小さい値(例4)を指定可能。
+_total_shards_env = os.getenv("TOTAL_SHARDS")
 bot = FastShardedBot(intents=intents, chunk_guilds_at_startup=False, member_cache_flags=member_cache_flags,
-                     connector=aiohttp_client_session, max_messages=None)
+                     connector=aiohttp_client_session, max_messages=None,
+                     shard_count=int(_total_shards_env) if _total_shards_env else None)
 
 # グローバル変数をbotインスタンスに保存（コグリロード時も永続化）
 def init_bot_state():
@@ -2170,7 +2179,7 @@ async def reinitialize():
 
     # ボイスキャッシュ読み込み
     try:
-        with open(os.path.dirname(os.path.abspath(__file__)) + "/cache/voice_cache.json", "r", encoding='utf-8') as f:
+        with open(os.path.dirname(os.path.abspath(__file__)) + f"/cache/voice_cache{_CLUSTER_SUFFIX}.json", "r", encoding='utf-8') as f:
             bot.voice_cache_dict = json.load(f)
             logger.info("ボイスキャッシュを読み込みました")
     except Exception as e:
@@ -2220,7 +2229,7 @@ async def save_join_list():
         savelist.append({"guild": server_id, "text_ch_id": text_ch_id, "voice_ch_id": guild.voice_client.channel.id,
                          "is_premium": server_id in premium_guild_dict,
                          "premium_value": premium_guild_dict.get(server_id, 0)})
-    with open(os.path.dirname(os.path.abspath(__file__)) + "/" + 'bot_stop.json', 'wt', encoding='utf-8') as f:
+    with open(os.path.dirname(os.path.abspath(__file__)) + "/" + f'bot_stop{_CLUSTER_SUFFIX}.json', 'wt', encoding='utf-8') as f:
         json.dump(savelist, f, ensure_ascii=False)
 
 
@@ -2230,7 +2239,10 @@ async def auto_join():
         description="復帰しました",
         color=discord.Colour.green(),
     )
-    with open(os.path.dirname(os.path.abspath(__file__)) + "/" + "bot_stop.json", encoding='utf-8') as f:
+    bot_stop_path = os.path.dirname(os.path.abspath(__file__)) + "/" + f"bot_stop{_CLUSTER_SUFFIX}.json"
+    if not os.path.exists(bot_stop_path):
+        return
+    with open(bot_stop_path, encoding='utf-8') as f:
         json_list = json.load(f)
         print(json_list)
         voice_channlel_list = []
@@ -3687,7 +3699,7 @@ async def add_premium_lopp(user_id, amount):
 @tasks.loop(hours=24)
 async def dict_and_cache_loop():
     print(voice_cache_dict)
-    with open(os.path.dirname(os.path.abspath(__file__)) + "/cache/" + f"voice_cache.json", 'wt',
+    with open(os.path.dirname(os.path.abspath(__file__)) + "/cache/" + f"voice_cache{_CLUSTER_SUFFIX}.json", 'wt',
               encoding='utf-8') as f:
         json.dump(voice_cache_dict, f, ensure_ascii=False)
     voice_cache_counter_dict.clear()
@@ -3850,10 +3862,12 @@ async def init_loop():
     bot.default_gpu_conn = aiohttp.TCPConnector(limit=20, limit_per_host=5)
     bot.premium_conn = aiohttp.TCPConnector(limit=20, limit_per_host=5)
 
-    with open(os.path.dirname(os.path.abspath(__file__)) + "/cache/voice_cache.json", "r", encoding='utf-8') as f:
-        bot.voice_cache_dict = json.load(f)
-        print("起動")
-        print(bot.voice_cache_dict)
+    try:
+        with open(os.path.dirname(os.path.abspath(__file__)) + f"/cache/voice_cache{_CLUSTER_SUFFIX}.json", "r", encoding='utf-8') as f:
+            bot.voice_cache_dict = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        bot.voice_cache_dict = {}
+    print("起動")
 
     bot.pool = await get_connection()
 
