@@ -4225,14 +4225,15 @@ async def henkan_private_dict(server_id, source, is_premium=False):
             output += f"#%&${split_text}#%&$"
             continue
         for k in dict_data:
-            if json_data[k].startswith("#%&$"):
+            value = str(json_data[k])
+            if value.startswith("#%&$"):
                 if is_premium and k.startswith('/') and k.endswith('/') and len(k) >= 3:
                     try:
-                        split_text = re2.sub(k[1:-1], json_data[k], split_text).encode("latin1").decode("utf-8")
+                        split_text = re2.sub(k[1:-1], value, split_text).encode("latin1").decode("utf-8")
                     except Exception:
                         pass
                 else:
-                    split_text = split_text.replace(k, json_data[k])
+                    split_text = split_text.replace(k, value)
                 if len(split_text) > limit:
                     split_text = split_text[:(text_limit_100 + 50)]
         output += split_text
@@ -4246,15 +4247,16 @@ async def henkan_private_dict(server_id, source, is_premium=False):
             output += f"#%&${split_text}#%&$"
             continue
         for k in dict_data:
-            if json_data[k].startswith("#%&$"):
+            value = str(json_data[k])
+            if value.startswith("#%&$"):
                 continue
             if is_premium and k.startswith('/') and k.endswith('/') and len(k) >= 3:
                 try:
-                    split_text = re2.sub(k[1:-1], json_data[k], split_text).encode("latin1").decode("utf-8")
+                    split_text = re2.sub(k[1:-1], value, split_text).encode("latin1").decode("utf-8")
                 except Exception:
                     pass
             else:
-                split_text = split_text.replace(k, json_data[k])
+                split_text = split_text.replace(k, value)
             if len(split_text) > limit:
                 split_text = split_text[:(text_limit_100 + 50)]
         output += split_text
