@@ -2246,11 +2246,16 @@ async def auto_join():
                     logger.error(f"Could not find text channel with ID {server_json['text_ch_id']} in guild {guild.id}")
                     continue
 
-                await text_channel.send(embed=embed)
+                if text_channel.permissions_for(guild.me).send_messages:
+                    await text_channel.send(embed=embed)
 
                 voice_channel: VoiceChannel = guild.get_channel(server_json["voice_ch_id"])
                 if voice_channel is None:
                     logger.error(f"Could not find voice channel with ID {server_json['voice_ch_id']} in guild {guild.id}")
+                    continue
+
+                if not (voice_channel.permissions_for(guild.me).connect and voice_channel.permissions_for(guild.me).speak):
+                    logger.warning(f"Missing connect/speak perms in {voice_channel.id} in guild {guild.id}")
                     continue
 
                 if len(voice_channel.voice_states) <= 0:
@@ -3425,6 +3430,10 @@ async def on_voice_state_update(member, before, after):
                 if channel is None:
                     logger.error(f"Could not find channel with ID {after.channel.id}")
                     return
+                perms = channel.permissions_for(channel.guild.me)
+                if not (perms.connect and perms.speak):
+                    logger.warning(f"Missing connect/speak perms in {channel.id}")
+                    return
                 await channel.connect(cls=LavalinkVoiceClient)
                 # Resolve text channel for this voice channel: prefer mapping list "text_channel_ids" with same index as voice_channel_ids; fallback to single text_channel_id; otherwise use invoking text channel if available
                 text_channel_id = None
@@ -3446,7 +3455,7 @@ async def on_voice_state_update(member, before, after):
                 if await getdatabase(after.channel.guild.id, "is_joinnotice", True, "guild"):
                     notify_channel_id = vclist.get(after.channel.guild.id)
                     text_channel = after.channel.guild.get_channel(notify_channel_id) if notify_channel_id else None
-                    if text_channel is not None:
+                    if text_channel is not None and text_channel.permissions_for(after.channel.guild.me).send_messages:
                         await text_channel.send(embed=embed)
                     else:
                         logger.error(f"Could not find text channel with ID {notify_channel_id}")
