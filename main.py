@@ -572,14 +572,18 @@ async def initdatabase():
         await conn.execute('ALTER TABLE guild ADD COLUMN IF NOT EXISTS mute_list bigint[];')
         await conn.execute('ALTER TABLE guild ADD COLUMN IF NOT EXISTS mute_voice bigint[];')
         await conn.execute('ALTER TABLE guild ADD COLUMN IF NOT EXISTS text_limit char(4);')
-        # クラスタ毎の接続数/導入数を集計するためのテーブル
+        # クラスタ毎の接続数/導入数を集計するためのテーブル(複数botでDB共有するため bot_id で分離)
         await conn.execute(
             '''CREATE TABLE IF NOT EXISTS cluster_stats(
-                cluster_id int PRIMARY KEY,
+                bot_id bigint,
+                cluster_id int,
                 guild_count int,
                 voice_count int,
                 updated_at timestamptz
             );''')
+        # 旧スキーマ(cluster_id単独PK)からの移行: bot_id列追加 & 旧PK削除
+        await conn.execute('ALTER TABLE cluster_stats ADD COLUMN IF NOT EXISTS bot_id bigint;')
+        await conn.execute('ALTER TABLE cluster_stats DROP CONSTRAINT IF EXISTS cluster_stats_pkey;')
 
 
 async def init_voice_list():
@@ -3711,32 +3715,37 @@ async def get_server_count():
 
 
 async def report_cluster_stats(guild_count, voice_count):
-    """このクラスタの導入数/接続数を共有DBに記録する。"""
-    if bot.pool is None:
+    """このbot・このクラスタの導入数/接続数を共有DBに記録する。"""
+    if bot.pool is None or bot.user is None:
         return
+    bot_id = bot.user.id
     try:
         async with bot.pool.acquire() as conn:
-            await conn.execute(
-                '''INSERT INTO cluster_stats (cluster_id, guild_count, voice_count, updated_at)
-                   VALUES ($1, $2, $3, NOW())
-                   ON CONFLICT (cluster_id) DO UPDATE
-                   SET guild_count = $2, voice_count = $3, updated_at = NOW();''',
-                CLUSTER_ID, guild_count, voice_count)
+            async with conn.transaction():
+                await conn.execute(
+                    'DELETE FROM cluster_stats WHERE bot_id = $1 AND cluster_id = $2;',
+                    bot_id, CLUSTER_ID)
+                await conn.execute(
+                    '''INSERT INTO cluster_stats (bot_id, cluster_id, guild_count, voice_count, updated_at)
+                       VALUES ($1, $2, $3, $4, NOW());''',
+                    bot_id, CLUSTER_ID, guild_count, voice_count)
     except Exception as e:
         logger.warning(f"cluster_stats報告失敗: {e}")
 
 
 async def get_total_stats():
-    """全クラスタ合計の(導入数, 接続数)を返す。120秒以上更新の無いクラスタは除外。"""
-    if bot.pool is None:
+    """このbotの全クラスタ合計の(導入数, 接続数)を返す。120秒以上更新の無いクラスタは除外。"""
+    if bot.pool is None or bot.user is None:
         return None
+    bot_id = bot.user.id
     try:
         async with bot.pool.acquire() as conn:
             row = await conn.fetchrow(
                 '''SELECT COALESCE(SUM(guild_count), 0) AS guilds,
                           COALESCE(SUM(voice_count), 0) AS voices
                    FROM cluster_stats
-                   WHERE updated_at > NOW() - INTERVAL '120 seconds';''')
+                   WHERE bot_id = $1 AND updated_at > NOW() - INTERVAL '120 seconds';''',
+                bot_id)
             return int(row["guilds"]), int(row["voices"])
     except Exception as e:
         logger.warning(f"cluster_stats集計失敗: {e}")
