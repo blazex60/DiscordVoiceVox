@@ -16,6 +16,8 @@ import time
 import importlib
 import urllib
 import uuid
+import io
+import wave
 from dataclasses import dataclass
 
 import aiofiles as aiofiles
@@ -113,6 +115,22 @@ _CLUSTER_SUFFIX = f"-c{CLUSTER_ID}" if CLUSTER_COUNT > 1 else ""
 
 # アップロード音声の最大サイズ。Discord無料枠と同じ 10MB(10 MiB)。
 MAX_UPLOAD_SIZE = 10 * 1024 * 1024
+
+
+def is_valid_wav(data: bytes) -> bool:
+    """実体がWAVか検証する。RIFF/WAVEヘッダ確認に加え、
+    wave モジュールで実際にPCM WAVとしてパースできるかまで確認する
+    (ヘッダ偽装・ポリグロットを弾く)。"""
+    if len(data) < 12 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+        return False
+    try:
+        with wave.open(io.BytesIO(data)) as w:
+            w.getnchannels()
+            w.getsampwidth()
+            w.getframerate()
+        return True
+    except Exception:
+        return False
 
 logger = logging.getLogger('discord')
 stream_handler = logging.StreamHandler()
@@ -2347,7 +2365,7 @@ async def addglobaldict(ctx, surface: discord.Option(input_type=str, description
             return
         # 実体がWAVか検証(content_type/filenameはクライアントが詐称可能なため信用しない)
         wav_bytes = await audio_file.read()
-        if not (len(wav_bytes) >= 12 and wav_bytes[:4] == b"RIFF" and wav_bytes[8:12] == b"WAVE"):
+        if not is_valid_wav(wav_bytes):
             embed = discord.Embed(
                 title="**Error**",
                 description=f"wavファイルのみ利用できます。mp3などの場合はファイル変換サイトなどでwavに変換が必要です。",
@@ -4029,7 +4047,7 @@ async def adddict_local(ctx, surface, pronunciation, audio_file, dict_file):
             return
         # 実体がWAVか検証(content_type/filenameはクライアントが詐称可能なため信用しない)
         wav_bytes = await audio_file.read()
-        if not (len(wav_bytes) >= 12 and wav_bytes[:4] == b"RIFF" and wav_bytes[8:12] == b"WAVE"):
+        if not is_valid_wav(wav_bytes):
             embed = discord.Embed(
                 title="**Error**",
                 description=f"wavファイルのみ利用できます。mp3などの場合はファイル変換サイトなどでwavに変換が必要です。",
