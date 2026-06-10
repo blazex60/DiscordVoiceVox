@@ -1,0 +1,146 @@
+name: discordvoicevox
+
+networks:
+  voicevox-net:
+    driver: bridge
+
+volumes:
+  postgres-data:
+
+x-bot-base: &bot-base
+  build: .
+  restart: unless-stopped
+  networks: [voicevox-net]
+  depends_on:
+    postgres:        {condition: service_healthy}
+    voicevox-engine: {condition: service_healthy}
+    lavalink:        {condition: service_healthy}
+
+services:
+  # --- Infrastructure ---
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: dvvox-postgres
+    restart: unless-stopped
+    networks: [voicevox-net]
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  voicevox-engine:
+    image: voicevox/voicevox_engine:nvidia-ubuntu22.04-latest
+    container_name: dvvox-engine
+    restart: unless-stopped
+    networks: [voicevox-net]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:50021/version"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+  lavalink:
+    image: ghcr.io/lavalink-devs/lavalink:4
+    container_name: dvvox-lavalink
+    restart: unless-stopped
+    networks: [voicevox-net]
+    environment:
+      LAVALINK_PASSWORD: ${LAVALINK_PASSWORD:-youshallnotpass}
+    volumes:
+      - ./lavalink/application.yml:/opt/Lavalink/application.yml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:2333/version || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # --- Bot instances ---
+
+  voicevox-main:
+    <<: *bot-base
+    container_name: voicevox-main
+    env_file:
+      - path: env/bot-main.env
+        required: false
+    volumes:
+      - /root/DiscordVoiceVox/user_dict:/app/user_dict
+      - /root/DiscordVoiceVox/logs:/app/logs
+      - /root/DiscordVoiceVox/guild_setting:/app/guild_setting
+      - /root/DiscordVoiceVox/cache:/app/cache
+
+  voicevox-c:
+    <<: *bot-base
+    container_name: voicevox-c
+    env_file:
+      - path: env/bot-c.env
+        required: false
+    volumes:
+      - /home/len/DiscordVoiceVox-c/user_dict:/app/user_dict
+      - /home/len/DiscordVoiceVox-c/logs:/app/logs
+      - /home/len/DiscordVoiceVox-c/guild_setting:/app/guild_setting
+      - /home/len/DiscordVoiceVox-c/cache:/app/cache
+
+  voicevox-d:
+    <<: *bot-base
+    container_name: voicevox-d
+    env_file:
+      - path: env/bot-d.env
+        required: false
+    volumes:
+      - /home/len/DiscordVoiceVox-d/user_dict:/app/user_dict
+      - /home/len/DiscordVoiceVox-d/logs:/app/logs
+      - /home/len/DiscordVoiceVox-d/guild_setting:/app/guild_setting
+      - /home/len/DiscordVoiceVox-d/cache:/app/cache
+
+  voicevox-e:
+    <<: *bot-base
+    container_name: voicevox-e
+    env_file:
+      - path: env/bot-e.env
+        required: false
+    volumes:
+      - /home/len/DiscordVoiceVox-e/user_dict:/app/user_dict
+      - /home/len/DiscordVoiceVox-e/logs:/app/logs
+      - /home/len/DiscordVoiceVox-e/guild_setting:/app/guild_setting
+      - /home/len/DiscordVoiceVox-e/cache:/app/cache
+
+  voicevox-z:
+    <<: *bot-base
+    container_name: voicevox-z
+    env_file:
+      - path: env/bot-z.env
+        required: false
+    volumes:
+      - /home/len/DiscordVoiceVox-z/user_dict:/app/user_dict
+      - /home/len/DiscordVoiceVox-z/logs:/app/logs
+      - /home/len/DiscordVoiceVox-z/guild_setting:/app/guild_setting
+      - /home/len/DiscordVoiceVox-z/cache:/app/cache
+
+  voicevox-h:
+    <<: *bot-base
+    container_name: voicevox-h
+    env_file:
+      - path: env/bot-h.env
+        required: false
+    volumes:
+      - /home/len/DiscordVoiceVox-h/user_dict:/app/user_dict
+      - /home/len/DiscordVoiceVox-h/logs:/app/logs
+      - /home/len/DiscordVoiceVox-h/guild_setting:/app/guild_setting
+      - /home/len/DiscordVoiceVox-h/cache:/app/cache
