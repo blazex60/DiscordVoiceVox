@@ -16,6 +16,8 @@ import time
 import importlib
 import urllib
 import uuid
+import io
+import wave
 from dataclasses import dataclass
 
 import aiofiles as aiofiles
@@ -106,12 +108,36 @@ BOT_NICKNAME = os.getenv("BOT_NICKNAME", "ずんだもんβ")
 EEW_WEBHOOK_URL = os.getenv("EEW_WEBHOOK_URL", None)
 # voice_id_list, non_premium_user, voice_choices, generating_guilds, pool は bot.* として init_bot_state() で初期化
 
+# クラスタリング設定。CLUSTER_COUNT が未設定 or 1 なら単一プロセス(従来動作)。
+CLUSTER_ID = int(os.getenv("CLUSTER_ID", "0"))
+CLUSTER_COUNT = int(os.getenv("CLUSTER_COUNT", "1"))
+_CLUSTER_SUFFIX = f"-c{CLUSTER_ID}" if CLUSTER_COUNT > 1 else ""
+
+# アップロード音声の最大サイズ。Discord無料枠と同じ 10MB(10 MiB)。
+MAX_UPLOAD_SIZE = 10 * 1024 * 1024
+
+
+def is_valid_wav(data: bytes) -> bool:
+    """実体がWAVか検証する。RIFF/WAVEヘッダ確認に加え、
+    wave モジュールで実際にPCM WAVとしてパースできるかまで確認する
+    (ヘッダ偽装・ポリグロットを弾く)。"""
+    if len(data) < 12 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+        return False
+    try:
+        with wave.open(io.BytesIO(data)) as w:
+            w.getnchannels()
+            w.getsampwidth()
+            w.getframerate()
+        return True
+    except Exception:
+        return False
+
 logger = logging.getLogger('discord')
 stream_handler = logging.StreamHandler()
 stream_handler.setLevel(logging.INFO)
 stream_handler.setFormatter(logging.Formatter("%(message)s"))
 handler = logging.FileHandler(filename=os.path.dirname(os.path.abspath(__file__)) + "/logs/"
-                                       + f'discord-{"{:%Y-%m-%d-%H-%M}".format(datetime.datetime.now())}.log',
+                                       + f'discord{_CLUSTER_SUFFIX}-{"{:%Y-%m-%d-%H-%M}".format(datetime.datetime.now())}.log',
                               encoding='utf-8', mode='w')
 handler.setFormatter(logging.Formatter('%(asctime)s:%(levelname)s:%(name)s: %(message)s'))
 BEHIND_NOTIFY_CHANNEL_ID = 888053573051629630
@@ -149,8 +175,12 @@ async def create_session():
 
 aiohttp_client_session = asyncio.get_event_loop().run_until_complete(create_session())
 
+# TOTAL_SHARDS で全シャード数を固定(未設定なら従来通りDiscordから自動取得)。
+# クラスタ間で必ず同じ値にすること。テスト時は小さい値(例4)を指定可能。
+_total_shards_env = os.getenv("TOTAL_SHARDS")
 bot = FastShardedBot(intents=intents, chunk_guilds_at_startup=False, member_cache_flags=member_cache_flags,
-                     connector=aiohttp_client_session, max_messages=None)
+                     connector=aiohttp_client_session, max_messages=None,
+                     shard_count=int(_total_shards_env) if _total_shards_env else None)
 
 # グローバル変数をbotインスタンスに保存（コグリロード時も永続化）
 def init_bot_state():
@@ -317,7 +347,7 @@ class LavalinkVoiceClient(discord.VoiceProtocol):
                 pass
 
     async def on_voice_state_update(self, data):
-        channel_id = data['channel_id']
+        channel_id = data.channel_id
 
         if not channel_id:
             await self._destroy()
@@ -2170,7 +2200,7 @@ async def reinitialize():
 
     # ボイスキャッシュ読み込み
     try:
-        with open(os.path.dirname(os.path.abspath(__file__)) + "/cache/voice_cache.json", "r", encoding='utf-8') as f:
+        with open(os.path.dirname(os.path.abspath(__file__)) + f"/cache/voice_cache{_CLUSTER_SUFFIX}.json", "r", encoding='utf-8') as f:
             bot.voice_cache_dict = json.load(f)
             logger.info("ボイスキャッシュを読み込みました")
     except Exception as e:
@@ -2220,7 +2250,7 @@ async def save_join_list():
         savelist.append({"guild": server_id, "text_ch_id": text_ch_id, "voice_ch_id": guild.voice_client.channel.id,
                          "is_premium": server_id in premium_guild_dict,
                          "premium_value": premium_guild_dict.get(server_id, 0)})
-    with open(os.path.dirname(os.path.abspath(__file__)) + "/" + 'bot_stop.json', 'wt', encoding='utf-8') as f:
+    with open(os.path.dirname(os.path.abspath(__file__)) + "/" + f'bot_stop{_CLUSTER_SUFFIX}.json', 'wt', encoding='utf-8') as f:
         json.dump(savelist, f, ensure_ascii=False)
 
 
@@ -2230,7 +2260,10 @@ async def auto_join():
         description="復帰しました",
         color=discord.Colour.green(),
     )
-    with open(os.path.dirname(os.path.abspath(__file__)) + "/" + "bot_stop.json", encoding='utf-8') as f:
+    bot_stop_path = os.path.dirname(os.path.abspath(__file__)) + "/" + f"bot_stop{_CLUSTER_SUFFIX}.json"
+    if not os.path.exists(bot_stop_path):
+        return
+    with open(bot_stop_path, encoding='utf-8') as f:
         json_list = json.load(f)
         print(json_list)
         voice_channlel_list = []
@@ -2246,11 +2279,16 @@ async def auto_join():
                     logger.error(f"Could not find text channel with ID {server_json['text_ch_id']} in guild {guild.id}")
                     continue
 
-                await text_channel.send(embed=embed)
+                if text_channel.permissions_for(guild.me).send_messages:
+                    await text_channel.send(embed=embed)
 
                 voice_channel: VoiceChannel = guild.get_channel(server_json["voice_ch_id"])
                 if voice_channel is None:
                     logger.error(f"Could not find voice channel with ID {server_json['voice_ch_id']} in guild {guild.id}")
+                    continue
+
+                if not (voice_channel.permissions_for(guild.me).connect and voice_channel.permissions_for(guild.me).speak):
+                    logger.warning(f"Missing connect/speak perms in {voice_channel.id} in guild {guild.id}")
                     continue
 
                 if len(voice_channel.voice_states) <= 0:
@@ -2317,7 +2355,7 @@ async def addglobaldict(ctx, surface: discord.Option(input_type=str, description
             )
             await ctx.respond(embed=embed)
             return
-        if audio_file.size > 10 * 1024 * 1024:
+        if audio_file.size > MAX_UPLOAD_SIZE:
             embed = discord.Embed(
                 title="**Error**",
                 description=f"ファイルサイズは最大10MBまでです。",
@@ -2325,8 +2363,9 @@ async def addglobaldict(ctx, surface: discord.Option(input_type=str, description
             )
             await ctx.respond(embed=embed)
             return
-        print(audio_file.content_type)
-        if str(audio_file.content_type) not in ["audio/x-wav"]:
+        # 実体がWAVか検証(content_type/filenameはクライアントが詐称可能なため信用しない)
+        wav_bytes = await audio_file.read()
+        if not is_valid_wav(wav_bytes):
             embed = discord.Embed(
                 title="**Error**",
                 description=f"wavファイルのみ利用できます。mp3などの場合はファイル変換サイトなどでwavに変換が必要です。",
@@ -2594,11 +2633,11 @@ async def generate_wav(text, speaker=1, filepath=None, target_host='localhost', 
             return await synthesis(target_host, conn, params, speed, pitch, len_limit, speaker, filepath, volume=0.8,
                                    query_host=target_host, is_self_upload=is_self_upload)
         elif aivoice_host == target_host:
-            return await synthesis(target_host, conn, params, speed, pitch, len_limit, speaker, filepath)
+            return await synthesis(target_host, conn, params, speed, pitch, len_limit, speaker, filepath, is_self_upload=is_self_upload)
         elif aivis_host == target_host:
-            return await synthesis(target_host, conn, params, speed, pitch, len_limit, speaker, filepath, query_host=target_host)
+            return await synthesis(target_host, conn, params, speed, pitch, len_limit, speaker, filepath, query_host=target_host, is_self_upload=is_self_upload)
         elif aques_host == target_host:
-            return await synthesis(target_host, conn, params, speed, pitch, len_limit, speaker, filepath, query_host=query_host)
+            return await synthesis(target_host, conn, params, speed, pitch, len_limit, speaker, filepath, query_host=query_host, is_self_upload=is_self_upload)
         else:
             if use_gpu_server is not True and vclist_len >= 1500:
                 use_gpu_server = True
@@ -3080,12 +3119,13 @@ async def yomiage(member, guild, text: str, no_read_name=False):
                 continue
             if gen_text.endswith(".wav"):
                 if gen_text.startswith("global_"):
-                    actual_name = gen_text[len("global_"):]
+                    actual_name = os.path.basename(gen_text[len("global_"):].replace("\\", "/"))
                     filename = (f"{user_dict_loc}/audio_data"
                                 f"/9686/{actual_name}")
                 else:
+                    safe_name = os.path.basename(gen_text.replace("\\", "/"))
                     filename = (f"{user_dict_loc}/audio_data"
-                                f"/{guild.id}/{gen_text}")
+                                f"/{guild.id}/{safe_name}")
                 if use_lavalink_upload:
                     async with aiofiles.open(filename,
                                              mode='rb') as f:
@@ -3425,6 +3465,10 @@ async def on_voice_state_update(member, before, after):
                 if channel is None:
                     logger.error(f"Could not find channel with ID {after.channel.id}")
                     return
+                perms = channel.permissions_for(channel.guild.me)
+                if not (perms.connect and perms.speak):
+                    logger.warning(f"Missing connect/speak perms in {channel.id}")
+                    return
                 await channel.connect(cls=LavalinkVoiceClient)
                 # Resolve text channel for this voice channel: prefer mapping list "text_channel_ids" with same index as voice_channel_ids; fallback to single text_channel_id; otherwise use invoking text channel if available
                 text_channel_id = None
@@ -3446,7 +3490,7 @@ async def on_voice_state_update(member, before, after):
                 if await getdatabase(after.channel.guild.id, "is_joinnotice", True, "guild"):
                     notify_channel_id = vclist.get(after.channel.guild.id)
                     text_channel = after.channel.guild.get_channel(notify_channel_id) if notify_channel_id else None
-                    if text_channel is not None:
+                    if text_channel is not None and text_channel.permissions_for(after.channel.guild.me).send_messages:
                         await text_channel.send(embed=embed)
                     else:
                         logger.error(f"Could not find text channel with ID {notify_channel_id}")
@@ -3678,7 +3722,7 @@ async def add_premium_lopp(user_id, amount):
 @tasks.loop(hours=24)
 async def dict_and_cache_loop():
     print(voice_cache_dict)
-    with open(os.path.dirname(os.path.abspath(__file__)) + "/cache/" + f"voice_cache.json", 'wt',
+    with open(os.path.dirname(os.path.abspath(__file__)) + "/cache/" + f"voice_cache{_CLUSTER_SUFFIX}.json", 'wt',
               encoding='utf-8') as f:
         json.dump(voice_cache_dict, f, ensure_ascii=False)
     voice_cache_counter_dict.clear()
@@ -3743,6 +3787,8 @@ async def save_join_list_task():
 
 @tasks.loop(minutes=10)
 async def premium_user_check_loop():
+    if premium_user_check_loop.current_loop != 0:
+        await asyncio.sleep(random.uniform(0, 600))
     if check_premium_id is None:
         return
     global premium_user_list
@@ -3780,7 +3826,7 @@ async def premium_user_check_loop():
 
 @premium_user_check_loop.before_loop
 async def before_premium_user_check_loop():
-    await asyncio.sleep(random.uniform(0, 600))
+    await bot.wait_until_ready()
 
 
 async def watch_cog_changes():
@@ -3839,10 +3885,12 @@ async def init_loop():
     bot.default_gpu_conn = aiohttp.TCPConnector(limit=20, limit_per_host=5)
     bot.premium_conn = aiohttp.TCPConnector(limit=20, limit_per_host=5)
 
-    with open(os.path.dirname(os.path.abspath(__file__)) + "/cache/voice_cache.json", "r", encoding='utf-8') as f:
-        bot.voice_cache_dict = json.load(f)
-        print("起動")
-        print(bot.voice_cache_dict)
+    try:
+        with open(os.path.dirname(os.path.abspath(__file__)) + f"/cache/voice_cache{_CLUSTER_SUFFIX}.json", "r", encoding='utf-8') as f:
+            bot.voice_cache_dict = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        bot.voice_cache_dict = {}
+    print("起動")
 
     bot.pool = await get_connection()
 
@@ -3989,7 +4037,7 @@ async def adddict_local(ctx, surface, pronunciation, audio_file, dict_file):
             )
             await ctx.respond(embed=embed)
             return
-        if audio_file.size > 10*1024*1024:
+        if audio_file.size > MAX_UPLOAD_SIZE:
             embed = discord.Embed(
                 title="**Error**",
                 description=f"ファイルサイズは最大10MBまでです。",
@@ -3997,8 +4045,9 @@ async def adddict_local(ctx, surface, pronunciation, audio_file, dict_file):
             )
             await ctx.respond(embed=embed)
             return
-        print(audio_file.content_type)
-        if str(audio_file.content_type) not in ["audio/x-wav"]:
+        # 実体がWAVか検証(content_type/filenameはクライアントが詐称可能なため信用しない)
+        wav_bytes = await audio_file.read()
+        if not is_valid_wav(wav_bytes):
             embed = discord.Embed(
                 title="**Error**",
                 description=f"wavファイルのみ利用できます。mp3などの場合はファイル変換サイトなどでwavに変換が必要です。",
@@ -4032,7 +4081,7 @@ async def adddict_local(ctx, surface, pronunciation, audio_file, dict_file):
         try:
             async with aiofiles.open(voice_path + "/" + file_name,
                                      mode='wb') as f:
-                await f.write(await audio_file.read())
+                await f.write(wav_bytes)
         except ReadTimeout:
             return
 
@@ -4223,14 +4272,15 @@ async def henkan_private_dict(server_id, source, is_premium=False):
             output += f"#%&${split_text}#%&$"
             continue
         for k in dict_data:
-            if json_data[k].startswith("#%&$"):
+            value = str(json_data[k])
+            if value.startswith("#%&$"):
                 if is_premium and k.startswith('/') and k.endswith('/') and len(k) >= 3:
                     try:
-                        split_text = re2.sub(k[1:-1], json_data[k], split_text).encode("latin1").decode("utf-8")
+                        split_text = re2.sub(k[1:-1], value, split_text).encode("latin1").decode("utf-8")
                     except Exception:
                         pass
                 else:
-                    split_text = split_text.replace(k, json_data[k])
+                    split_text = split_text.replace(k, value)
                 if len(split_text) > limit:
                     split_text = split_text[:(text_limit_100 + 50)]
         output += split_text
@@ -4244,15 +4294,16 @@ async def henkan_private_dict(server_id, source, is_premium=False):
             output += f"#%&${split_text}#%&$"
             continue
         for k in dict_data:
-            if json_data[k].startswith("#%&$"):
+            value = str(json_data[k])
+            if value.startswith("#%&$"):
                 continue
             if is_premium and k.startswith('/') and k.endswith('/') and len(k) >= 3:
                 try:
-                    split_text = re2.sub(k[1:-1], json_data[k], split_text).encode("latin1").decode("utf-8")
+                    split_text = re2.sub(k[1:-1], value, split_text).encode("latin1").decode("utf-8")
                 except Exception:
                     pass
             else:
-                split_text = split_text.replace(k, json_data[k])
+                split_text = split_text.replace(k, value)
             if len(split_text) > limit:
                 split_text = split_text[:(text_limit_100 + 50)]
         output += split_text
@@ -4455,7 +4506,7 @@ async def connect_websocket():
 async def auto_restart():
     # 水曜日（weekday=2）のみ実行
     if datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=+9), 'JST')).weekday() == 2:
-        await restart("ずんだもんの定期再起動を行います（毎週水曜日9:00）")
+        await stop("ずんだもんの定期再起動を行います（毎週水曜日9:00）")
 
 if __name__ == '__main__':
     bot.loop.create_task(init_loop())
