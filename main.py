@@ -111,6 +111,9 @@ CLUSTER_ID = int(os.getenv("CLUSTER_ID", "0"))
 CLUSTER_COUNT = int(os.getenv("CLUSTER_COUNT", "1"))
 _CLUSTER_SUFFIX = f"-c{CLUSTER_ID}" if CLUSTER_COUNT > 1 else ""
 
+# アップロード音声の最大サイズ。Discord無料枠と同じ 10MB(10 MiB)。
+MAX_UPLOAD_SIZE = 10 * 1024 * 1024
+
 logger = logging.getLogger('discord')
 stream_handler = logging.StreamHandler()
 stream_handler.setLevel(logging.INFO)
@@ -2334,7 +2337,7 @@ async def addglobaldict(ctx, surface: discord.Option(input_type=str, description
             )
             await ctx.respond(embed=embed)
             return
-        if audio_file.size > 10 * 1024 * 1024:
+        if audio_file.size > MAX_UPLOAD_SIZE:
             embed = discord.Embed(
                 title="**Error**",
                 description=f"ファイルサイズは最大10MBまでです。",
@@ -2342,8 +2345,9 @@ async def addglobaldict(ctx, surface: discord.Option(input_type=str, description
             )
             await ctx.respond(embed=embed)
             return
-        print(audio_file.content_type)
-        if str(audio_file.content_type) not in ["audio/x-wav"]:
+        # 実体がWAVか検証(content_type/filenameはクライアントが詐称可能なため信用しない)
+        wav_bytes = await audio_file.read()
+        if not (len(wav_bytes) >= 12 and wav_bytes[:4] == b"RIFF" and wav_bytes[8:12] == b"WAVE"):
             embed = discord.Embed(
                 title="**Error**",
                 description=f"wavファイルのみ利用できます。mp3などの場合はファイル変換サイトなどでwavに変換が必要です。",
@@ -3097,12 +3101,13 @@ async def yomiage(member, guild, text: str, no_read_name=False):
                 continue
             if gen_text.endswith(".wav"):
                 if gen_text.startswith("global_"):
-                    actual_name = gen_text[len("global_"):]
+                    actual_name = os.path.basename(gen_text[len("global_"):].replace("\\", "/"))
                     filename = (f"{user_dict_loc}/audio_data"
                                 f"/9686/{actual_name}")
                 else:
+                    safe_name = os.path.basename(gen_text.replace("\\", "/"))
                     filename = (f"{user_dict_loc}/audio_data"
-                                f"/{guild.id}/{gen_text}")
+                                f"/{guild.id}/{safe_name}")
                 if use_lavalink_upload:
                     async with aiofiles.open(filename,
                                              mode='rb') as f:
@@ -4014,7 +4019,7 @@ async def adddict_local(ctx, surface, pronunciation, audio_file, dict_file):
             )
             await ctx.respond(embed=embed)
             return
-        if audio_file.size > 10*1024*1024:
+        if audio_file.size > MAX_UPLOAD_SIZE:
             embed = discord.Embed(
                 title="**Error**",
                 description=f"ファイルサイズは最大10MBまでです。",
@@ -4022,8 +4027,9 @@ async def adddict_local(ctx, surface, pronunciation, audio_file, dict_file):
             )
             await ctx.respond(embed=embed)
             return
-        print(audio_file.content_type)
-        if str(audio_file.content_type) not in ["audio/x-wav"]:
+        # 実体がWAVか検証(content_type/filenameはクライアントが詐称可能なため信用しない)
+        wav_bytes = await audio_file.read()
+        if not (len(wav_bytes) >= 12 and wav_bytes[:4] == b"RIFF" and wav_bytes[8:12] == b"WAVE"):
             embed = discord.Embed(
                 title="**Error**",
                 description=f"wavファイルのみ利用できます。mp3などの場合はファイル変換サイトなどでwavに変換が必要です。",
@@ -4057,7 +4063,7 @@ async def adddict_local(ctx, surface, pronunciation, audio_file, dict_file):
         try:
             async with aiofiles.open(voice_path + "/" + file_name,
                                      mode='wb') as f:
-                await f.write(await audio_file.read())
+                await f.write(wav_bytes)
         except ReadTimeout:
             return
 
