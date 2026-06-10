@@ -180,7 +180,10 @@ aiohttp_client_session = asyncio.get_event_loop().run_until_complete(create_sess
 _total_shards_env = os.getenv("TOTAL_SHARDS")
 bot = FastShardedBot(intents=intents, chunk_guilds_at_startup=False, member_cache_flags=member_cache_flags,
                      connector=aiohttp_client_session, max_messages=None,
-                     shard_count=int(_total_shards_env) if _total_shards_env else None)
+                     shard_count=int(_total_shards_env) if _total_shards_env else None,
+                     # コマンド登録(sync)はアプリ単位なので cluster 0 のみ実施。
+                     # 全クラスタがsyncするとレート制限に当たるため。
+                     auto_sync_commands=(CLUSTER_ID == 0))
 
 # グローバル変数をbotインスタンスに保存（コグリロード時も永続化）
 def init_bot_state():
@@ -569,6 +572,14 @@ async def initdatabase():
         await conn.execute('ALTER TABLE guild ADD COLUMN IF NOT EXISTS mute_list bigint[];')
         await conn.execute('ALTER TABLE guild ADD COLUMN IF NOT EXISTS mute_voice bigint[];')
         await conn.execute('ALTER TABLE guild ADD COLUMN IF NOT EXISTS text_limit char(4);')
+        # クラスタ毎の接続数/導入数を集計するためのテーブル
+        await conn.execute(
+            '''CREATE TABLE IF NOT EXISTS cluster_stats(
+                cluster_id int PRIMARY KEY,
+                guild_count int,
+                voice_count int,
+                updated_at timestamptz
+            );''')
 
 
 async def init_voice_list():
@@ -3649,7 +3660,14 @@ async def status_update_loop():
     is_use_gpu_server = is_use_gpu_server_enabled
     global vclist_len
     local_vclen = len(vclist)
-    text = f"{str(local_vclen)}/{str(len(bot.guilds))}読み上げ中\n N:{round(avarage, 1)}s P:{round(avarage_p, 1)}s"
+    # 各クラスタが自分の数を記録し、全クラスタ合計を取得して表示
+    await report_cluster_stats(len(bot.guilds), local_vclen)
+    totals = await get_total_stats()
+    if totals is not None:
+        total_guilds, total_voice = totals
+    else:
+        total_guilds, total_voice = len(bot.guilds), local_vclen
+    text = f"{str(total_voice)}/{str(total_guilds)}読み上げ中\n N:{round(avarage, 1)}s P:{round(avarage_p, 1)}s"
     if check_count_id is not None:
         beta_count = await get_server_count()
         if beta_count is None:
@@ -3658,7 +3676,7 @@ async def status_update_loop():
             print(beta_count)
             vclist_len = beta_count
     else:
-        vclist_len = local_vclen
+        vclist_len = total_voice
     logger.info(text)
     voice_generate_time_list_p.clear()
     voice_generate_time_list.clear()
@@ -3689,6 +3707,39 @@ async def get_server_count():
         return None
     except ValueError:
         print("取得した値を整数に変換できませんでした。")
+        return None
+
+
+async def report_cluster_stats(guild_count, voice_count):
+    """このクラスタの導入数/接続数を共有DBに記録する。"""
+    if bot.pool is None:
+        return
+    try:
+        async with bot.pool.acquire() as conn:
+            await conn.execute(
+                '''INSERT INTO cluster_stats (cluster_id, guild_count, voice_count, updated_at)
+                   VALUES ($1, $2, $3, NOW())
+                   ON CONFLICT (cluster_id) DO UPDATE
+                   SET guild_count = $2, voice_count = $3, updated_at = NOW();''',
+                CLUSTER_ID, guild_count, voice_count)
+    except Exception as e:
+        logger.warning(f"cluster_stats報告失敗: {e}")
+
+
+async def get_total_stats():
+    """全クラスタ合計の(導入数, 接続数)を返す。120秒以上更新の無いクラスタは除外。"""
+    if bot.pool is None:
+        return None
+    try:
+        async with bot.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                '''SELECT COALESCE(SUM(guild_count), 0) AS guilds,
+                          COALESCE(SUM(voice_count), 0) AS voices
+                   FROM cluster_stats
+                   WHERE updated_at > NOW() - INTERVAL '120 seconds';''')
+            return int(row["guilds"]), int(row["voices"])
+    except Exception as e:
+        logger.warning(f"cluster_stats集計失敗: {e}")
         return None
 
 
