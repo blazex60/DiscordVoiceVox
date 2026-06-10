@@ -2633,11 +2633,11 @@ async def generate_wav(text, speaker=1, filepath=None, target_host='localhost', 
             return await synthesis(target_host, conn, params, speed, pitch, len_limit, speaker, filepath, volume=0.8,
                                    query_host=target_host, is_self_upload=is_self_upload)
         elif aivoice_host == target_host:
-            return await synthesis(target_host, conn, params, speed, pitch, len_limit, speaker, filepath)
+            return await synthesis(target_host, conn, params, speed, pitch, len_limit, speaker, filepath, is_self_upload=is_self_upload)
         elif aivis_host == target_host:
-            return await synthesis(target_host, conn, params, speed, pitch, len_limit, speaker, filepath, query_host=target_host)
+            return await synthesis(target_host, conn, params, speed, pitch, len_limit, speaker, filepath, query_host=target_host, is_self_upload=is_self_upload)
         elif aques_host == target_host:
-            return await synthesis(target_host, conn, params, speed, pitch, len_limit, speaker, filepath, query_host=query_host)
+            return await synthesis(target_host, conn, params, speed, pitch, len_limit, speaker, filepath, query_host=query_host, is_self_upload=is_self_upload)
         else:
             if use_gpu_server is not True and vclist_len >= 1500:
                 use_gpu_server = True
