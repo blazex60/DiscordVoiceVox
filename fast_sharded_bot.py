@@ -1,6 +1,15 @@
 import asyncio
+import os
 import discord
 from discord.http import Route
+
+
+def compute_shard_ids(shard_count, cluster_count, cluster_id):
+    """このクラスタが担当するシャードIDのリストを返す。
+    cluster_count<=1 なら全シャード(=単一プロセス)。"""
+    if cluster_count <= 1:
+        return list(range(shard_count))
+    return [s for s in range(shard_count) if s % cluster_count == cluster_id]
 
 
 class FastShardedBot(discord.AutoShardedBot):
@@ -31,7 +40,18 @@ class FastShardedBot(discord.AutoShardedBot):
             gateway = await self.http.get_gateway()
 
         self._connection.shard_count = self.shard_count
-        shard_ids = list(self.shard_ids or range(self.shard_count))
+
+        # クラスタリング: CLUSTER_COUNT>1 のとき担当シャードのみ起動。
+        # 未設定 or 1 のときは従来通り全シャードを1プロセスで起動。
+        cluster_count = int(os.getenv("CLUSTER_COUNT", "1"))
+        cluster_id = int(os.getenv("CLUSTER_ID", "0"))
+        if self.shard_ids:
+            shard_ids = list(self.shard_ids)
+        else:
+            shard_ids = compute_shard_ids(self.shard_count, cluster_count, cluster_id)
+            if cluster_count > 1:
+                print(f"[cluster {cluster_id}/{cluster_count}] shards: {shard_ids}")
+        self.shard_ids = shard_ids
         self._connection.shard_ids = shard_ids
 
         sem = await self._get_max_concurrency()
