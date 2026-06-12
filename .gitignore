@@ -1,0 +1,30 @@
+# Environment / secrets
+.env
+.env.*
+.env_temp
+env/*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Runtime data (bind-mounted in production)
+logs/*.log
+cache/voice_cache.json
+guild_setting/*.json
+user_dict/audio_data/
+
+# Docker
+.dockerignore
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+
+.omc
